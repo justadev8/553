@@ -3,10 +3,12 @@ import random
 from gmpy2 import mpfr
 from gmpy2 import mpz
 from gmpy2 import rint_round
+from collections import deque
 
 gmpy2.get_context().precision = 1000
 number_of_processes = 5
-number_of_events_process = 5
+number_of_events_process = 100
+acceptable_difference =0.0001
 
 
 def generate_event():
@@ -26,6 +28,11 @@ def generate_event():
         futureLogicalTaskTime = futureLogicalTaskTime + 1
     return eventList
 
+def roundAntiLogAndReturn(arg):
+    if abs(rint_round(gmpy2.exp(arg))-gmpy2.exp(arg)) < acceptable_difference :
+        return gmpy2.log(rint_round(gmpy2.exp(arg)))
+    else:
+        return arg
 
 def getRandomProcess():
     return random.randint(1, number_of_processes)
@@ -66,6 +73,8 @@ def copyOf(object_array):
         new_reference.append(x)
     return new_reference
 
+def mpfrCopyOf(object):
+    return mpfr(object)
 
 def getProcesses():
     process_list = []
@@ -99,6 +108,7 @@ class Event(object):
         self.sendProcessId = sendProcessId
         self.receiveProcessId = receiveProcessId
         self.sendStartTime = sendStartTime
+        self.receiveStartTime = -1
 
     def __str__(self):
         return "Event Id:{}, Event Type: {}, Sender Process: {}, Receiver Process:{}, Start Time:{}".format(
@@ -125,6 +135,46 @@ def log(a):
 def antilog(a):
     return gmpy2.exp(a)
 
+def isEventCausal_VectorClock(array1, array2):
+    for i in range(len(array1)):
+        if array1[i] < array2[i]:
+            return False
+    return True
+
+def isEventCausal_PrimeClock(prime1, prime2):
+    if prime1 % prime2 ==0:
+        return True
+    return False
+
+def isEventCausal_LogClock(log1, log2):
+    diff = sub(log1, log2)
+    if diff < 0:
+        return False
+    if abs(rint_round(gmpy2.exp(diff)) - gmpy2.exp(diff)) < acceptable_difference:
+        return True
+    return False
+
+def compareInternalEvent(event1, event2):
+    timestamp1 = event1.SendTimeStamp
+    timestamp2 = event2.SendTimeStamp
+
+    isVectorClockCausal = isEventCausal_VectorClock(timestamp1.vectorClock, timestamp2.vectorClock)
+    isPrimeClockCausal = isEventCausal_PrimeClock(timestamp1.primeClock, timestamp2.primeClock)
+    isLogClockCausal = isEventCausal_LogClock(timestamp1.logClock, timestamp2.logClock)
+
+    if isVectorClockCausal !=isLogClockCausal:
+        if isLogClockCausal is True:
+            isEventCausal_LogClock(timestamp1.logClock, timestamp2.logClock)
+        print("mismatch")
+
+
+def compareEvents(eventList):
+    for event1 in eventList:
+        for event2 in eventList:
+            if event1 != event2:
+                if event1.eventType =='I' and event2.eventType =='I' :
+                    compareInternalEvent(event1, event2)
+
 class Process(object):
     """docstring for Process"""
 
@@ -134,28 +184,31 @@ class Process(object):
         self.primeNumber = mpfr(primeNumber)
         self.logicalTime = 0
         self.vectorClock = [0 for index in range(1, number_of_processes + 1)]
-        self.primeClock = mpfr(0)
-        self.logClock = mpfr(0)
+        self.primeClock = mpfr(1)
+        self.logClock = gmpy2.log(1)
         self.logPrime = gmpy2.log(primeNumber)
-        self.queue = []
-        self.receiver_queue = []
+        self.queue = deque()
+        self.receiver_queue = deque()
 
     def set_other_processes_instances(self, instances):
         self.instances = instances
 
     def internal_event(self, event):
-        self.vectorClock[self.processId - 1] += self.vectorClock[self.processId - 1]
+        self.vectorClock[self.processId - 1] += 1
         self.primeClock = multiply(self.primeClock, self.primeNumber)
         self.logClock = add(self.logClock ,self.logPrime)
+        self.logClock = roundAntiLogAndReturn( self.logClock )
         self.logicalTime += 1
-        event.SendTimeStamp = TimeStamp(self.vectorClock, self.primeClock, self.logClock)
+        event.SendTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock))
 
     def send_event(self, event):
-        self.vectorClock[self.processId - 1] += self.vectorClock[self.processId - 1]
+        self.vectorClock[self.processId - 1] += 1
         self.primeClock = multiply(self.primeClock, self.primeNumber)
         self.logClock = add(self.logClock , self.logPrime)
+        self.logClock = roundAntiLogAndReturn(self.logClock)
 
-        event.SendTimeStamp = TimeStamp(copyOf(self.vectorClock), copyOf(self.primeClock), copyOf(self.logClock))
+        event.SendTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock))
+        event.receiveStartTime = self.logicalTime
         self.instances[event.receiveProcessId - 1].receiver_queue.append(event)
         self.logicalTime += 1
 
@@ -167,7 +220,7 @@ class Process(object):
             if sendTimeStamp.vectorClock[index] > self.vectorClock[index]:
                 self.vectorClock[index]=sendTimeStamp.vectorClock[index]
 
-        self.vectorClock[self.processId - 1] += self.vectorClock[self.processId - 1]
+        self.vectorClock[self.processId - 1] += 1
 
         #setting prime number
         self.primeClock = getLCM(self.primeClock, sendTimeStamp.primeClock)
@@ -177,9 +230,11 @@ class Process(object):
         gcd  = getGCD(antilog(self.logClock), antilog(sendTimeStamp.logClock))
         self.logClock = add(self.logClock, sendTimeStamp.logClock)
         self.logClock= sub(self.logClock, log(gcd))
+        self.logClock = add(self.logClock, self.logPrime)
+        self.logClock = roundAntiLogAndReturn(self.logClock)
 
-        event.ReceiveTimeStamp = TimeStamp(copyOf(self.vectorClock), copyOf(self.primeClock), copyOf(self.logClock))
-        self.instances[event.receiveProcessId - 1].receiver_queue.append(event)
+        event.ReceiveTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock))
+        #self.instances[event.receiveProcessId - 1].receiver_queue.append(event)
         self.logicalTime += 1
 
     def __str__(self):
@@ -190,8 +245,15 @@ class Process(object):
         if not self.queue and not self.receiver_queue:
             return None
         else:
+            if self.receiver_queue:
+                event = self.receiver_queue[0]
+                if event.receiveStartTime <= logical_time:
+                    return self.receiver_queue.popleft()
             if self.queue:
-                self.queue[0]
+                event = self.queue[0]
+                if event.sendStartTime <= logical_time:
+                    return self.queue.popleft()
+
 
 
 eventList = generate_event()
@@ -210,7 +272,29 @@ print([str(process) for process in processList])
 # start the processes
 
 logical_time = 0
+completed_events = 0
 
-while logical_time < number_of_processes * number_of_processes:
+while logical_time < number_of_processes * number_of_events_process:
+
+
+    for process in processList:
+        while True:
+            event = process.getEvent(logical_time)
+            if event is None:
+                break
+
+            if event.eventType == 'E':
+                if process.processId == event.sendProcessId:
+                    #sender process
+                    process.send_event(event)
+                    completed_events+=1
+                else:
+                    process.receive_event(event)
+
+            else:
+                process.internal_event(event)
+                completed_events+=1
 
     logical_time += 1
+
+compareEvents(eventList)
