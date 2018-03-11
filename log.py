@@ -1,31 +1,65 @@
 import gmpy2
 import random
+import csv
 from gmpy2 import mpfr
 from gmpy2 import mpz
 from gmpy2 import rint_round
 from collections import deque
 
-gmpy2.get_context().precision = 1000
-number_of_processes = 5
-number_of_events_process = 100
-acceptable_difference =0.0001
-
+gmpy2.get_context().precision = 4096*2
+number_of_processes = 30
+number_of_events_process = 50
+acceptable_difference =0.000000001
+file_delimiter="|"
+rerun = "Y"
+event_file_name ="events.txt"
 
 def generate_event():
-    futureLogicalTaskTime = 0
+    if rerun == "Y":
+        return readEvent()
+    else :
+        futureLogicalTaskTime = 0
+        internalEventCount=0
+        externalEventCount=0
+        eventList = []
+        for eventId in range(1, (number_of_processes * number_of_events_process) + 1):
+            senderProcess = getRandomProcess()
+            if random.randint(1, 3) == 1:
+                # internal event
+                event = Event(eventId, "I", senderProcess, "", futureLogicalTaskTime)
+                # print event
+                eventList.append(event)
+                internalEventCount+=1
+            else:
+                event = Event(eventId, "E", senderProcess, getRandomReceiveProcess(senderProcess), futureLogicalTaskTime)
+                # print event
+                eventList.append(event)
+                externalEventCount+=1
+            futureLogicalTaskTime = futureLogicalTaskTime + 1
+        print("Count of internal events:{}".format(internalEventCount))
+        print("Count of external events:{}".format(externalEventCount))
+        saveEvent(eventList)
+        return eventList
+
+def saveEvent(eventList):
+    file_handle=open(event_file_name, "w")
+
+    eventListStr = []
+    for event in eventList:
+        file_handle.write(str(event.eventId)+ file_delimiter+ event.eventType + file_delimiter + str(event.sendProcessId)+file_delimiter+str(event.receiveProcessId)+file_delimiter+str(event.sendStartTime)+"\n")
+
+    file_handle.close()
+
+def readEvent():
+    records =open(event_file_name, "r").read().split('\n')
     eventList = []
-    for eventId in range(1, (number_of_processes * number_of_events_process) + 1):
-        senderProcess = getRandomProcess()
-        if random.randint(1, 3) == 1:
-            # internal event
-            event = Event(eventId, "I", senderProcess, "", futureLogicalTaskTime)
-            # print event
-            eventList.append(event)
-        else:
-            event = Event(eventId, "E", senderProcess, getRandomReceiveProcess(senderProcess), futureLogicalTaskTime)
-            # print event
-            eventList.append(event)
-        futureLogicalTaskTime = futureLogicalTaskTime + 1
+    for record in records:
+        if record != '':
+            eventId, eventType, senderProcessId, receiverProcessId, senderStartTime  = record.split("|")
+            if receiverProcessId == '':
+                receiverProcessId=-1
+            eventList.append(Event(int(eventId), eventType, int(senderProcessId), int(receiverProcessId), int(senderStartTime)))
+    #records.close()
     return eventList
 
 def roundAntiLogAndReturn(arg):
@@ -36,7 +70,6 @@ def roundAntiLogAndReturn(arg):
 
 def getRandomProcess():
     return random.randint(1, number_of_processes)
-
 
 def getRandomReceiveProcess(process_to_be_avoided):
     while True:
@@ -96,7 +129,6 @@ class TimeStamp(object):
     def __str__(self):
         return "Log Clock: {}, Prime Clock: {}, Vector Clock:{}".format(self.logClock, self.primeClock,
                                                                         self.vectorClock)
-
 
 class Event(object):
     """docstring for Event"""
@@ -158,22 +190,92 @@ def compareInternalEvent(event1, event2):
     timestamp1 = event1.SendTimeStamp
     timestamp2 = event2.SendTimeStamp
 
+    if compareAndReturnResult(timestamp1,timestamp2) == False:
+        #print("Not matched")
+        compareAndReturnResult(timestamp1, timestamp2)
+        return False
+
+    return True
+
+def compareAndReturnResult(timestamp1, timestamp2):
     isVectorClockCausal = isEventCausal_VectorClock(timestamp1.vectorClock, timestamp2.vectorClock)
     isPrimeClockCausal = isEventCausal_PrimeClock(timestamp1.primeClock, timestamp2.primeClock)
     isLogClockCausal = isEventCausal_LogClock(timestamp1.logClock, timestamp2.logClock)
 
-    if isVectorClockCausal !=isLogClockCausal:
-        if isLogClockCausal is True:
-            isEventCausal_LogClock(timestamp1.logClock, timestamp2.logClock)
-        print("mismatch")
+    if isVectorClockCausal == isLogClockCausal:
+        #matched_count+=1
+        return True
+    else :
+        return False
 
+def compareInternalAndExternalEvent(internalEvent, externalEvent):
+    timestamps = [internalEvent.SendTimeStamp, externalEvent.SendTimeStamp, externalEvent.ReceiveTimeStamp]
+
+    for timestamp1 in timestamps:
+        for timestamp2 in timestamps:
+            if timestamp1 != timestamp2:
+                if compareAndReturnResult(timestamp1, timestamp2) == False:
+                    #print("Not matched")
+                    compareAndReturnResult(timestamp1, timestamp2)
+                    return False
+    return True
+
+
+def compareExternalEvents(event1, event2):
+    sendTimestamp1 = event1.SendTimeStamp
+    sendTimestamp2 = event2.SendTimeStamp
+    receiveTimestamp1 = event1.ReceiveTimeStamp
+    receiveTimestamp2 = event2.ReceiveTimeStamp
+
+    timestamps  = [sendTimestamp1, sendTimestamp2, receiveTimestamp1, receiveTimestamp2]
+
+    for timestamp1 in timestamps:
+        for timestamp2 in timestamps:
+            if timestamp1 != timestamp2:
+                if compareAndReturnResult(timestamp1, timestamp2) == False:
+                   # print("Not matched")
+                    compareAndReturnResult(timestamp1, timestamp2)
+                    return False
+
+    return  True
 
 def compareEvents(eventList):
+    matched_count=0
+    unmatched_count=0
     for event1 in eventList:
         for event2 in eventList:
             if event1 != event2:
                 if event1.eventType =='I' and event2.eventType =='I' :
-                    compareInternalEvent(event1, event2)
+                    if compareInternalEvent(event1, event2) == True:
+                        matched_count+=1
+                        #print("matched count={}".format(matched_count))
+                    else:
+                        unmatched_count+=1
+                        print("unmatched count={}".format(unmatched_count))
+                elif (event1.eventType =='E' and event2.eventType =='I') or (event1.eventType =='I' and event2.eventType =='E'):
+                    if event1.eventType=='I':
+                        if compareInternalAndExternalEvent(event1, event2) == True:
+                            matched_count+=1
+                          #  print("matched count={}".format(matched_count))
+                        else:
+                            unmatched_count+=1
+                            print("unmatched count={}".format(unmatched_count))
+                    else:
+                        if compareInternalAndExternalEvent(event2, event1) == True:
+                            matched_count+=1
+                           # print("matched count={}".format(matched_count))
+                        else:
+                            unmatched_count+=1
+                            print("unmatched count={}".format(unmatched_count))
+                else:
+                    if compareExternalEvents(event1, event2) == True:
+                        matched_count+=1
+                      #  print("matched count={}".format(matched_count))
+                    else:
+                        unmatched_count+=1
+                        print("unmatched count={}".format(unmatched_count))
+    print("Matched count:{}".format(matched_count))
+    print("Unmatched count:{}".format(unmatched_count))
 
 class Process(object):
     """docstring for Process"""
@@ -254,9 +356,8 @@ class Process(object):
                 if event.sendStartTime <= logical_time:
                     return self.queue.popleft()
 
-
-
 eventList = generate_event()
+#saveEvent(eventList)
 print([str(event) for event in eventList])
 processList = getProcesses()
 
@@ -274,9 +375,7 @@ print([str(process) for process in processList])
 logical_time = 0
 completed_events = 0
 
-while logical_time < number_of_processes * number_of_events_process:
-
-
+while logical_time <= number_of_processes * number_of_events_process:
     for process in processList:
         while True:
             event = process.getEvent(logical_time)
@@ -297,4 +396,5 @@ while logical_time < number_of_processes * number_of_events_process:
 
     logical_time += 1
 
+print("Starting with comparison")
 compareEvents(eventList)
