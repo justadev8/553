@@ -5,14 +5,24 @@ from gmpy2 import mpfr
 from gmpy2 import mpz
 from gmpy2 import rint_round
 from collections import deque
+import bitstring
+from bitstring import BitArray
 
-gmpy2.get_context().precision = 4096*2
+gmpy2.get_context().precision = 2048*2
+floating_precision = 64
+
 number_of_processes = 30
 number_of_events_process = 50
-acceptable_difference =0.000000001
+acceptable_difference =0.01
 file_delimiter="|"
 rerun = "Y"
 event_file_name ="events.txt"
+
+def getPrecisionWithLimit(num):
+    return num
+    #print(num)
+    #print( mpfr(BitArray(float=num, length=floating_precision).float))
+    #return mpfr(BitArray(float=num, length=floating_precision).float)
 
 def generate_event():
     if rerun == "Y":
@@ -63,10 +73,10 @@ def readEvent():
     return eventList
 
 def roundAntiLogAndReturn(arg):
-    if abs(rint_round(gmpy2.exp(arg))-gmpy2.exp(arg)) < acceptable_difference :
-        return gmpy2.log(rint_round(gmpy2.exp(arg)))
-    else:
-        return arg
+    # if abs(rint_round(gmpy2.exp(arg))-gmpy2.exp(arg)) < acceptable_difference :
+    #     return getPrecisionWithLimit(gmpy2.log(rint_round(gmpy2.exp(arg))))
+    # else:
+    return getPrecisionWithLimit(arg)
 
 def getRandomProcess():
     return random.randint(1, number_of_processes)
@@ -239,46 +249,79 @@ def compareExternalEvents(event1, event2):
 
     return  True
 
+# def compareEvents(eventList):
+#     matched_count=0
+#     unmatched_count=0
+#     for event1 in eventList:
+#         for event2 in eventList:
+#             if event1 != event2:
+#                 if event1.eventType =='I' and event2.eventType =='I' :
+#                     if compareInternalEvent(event1, event2) == True:
+#                         matched_count+=1
+#                         #print("matched count={}".format(matched_count))
+#                     else:
+#                         unmatched_count+=1
+#                         print("unmatched count={}".format(unmatched_count))
+#                 elif (event1.eventType =='E' and event2.eventType =='I') or (event1.eventType =='I' and event2.eventType =='E'):
+#                     if event1.eventType=='I':
+#                         if compareInternalAndExternalEvent(event1, event2) == True:
+#                             matched_count+=1
+#                           #  print("matched count={}".format(matched_count))
+#                         else:
+#                             unmatched_count+=1
+#                             print("unmatched count={}".format(unmatched_count))
+#                     else:
+#                         if compareInternalAndExternalEvent(event2, event1) == True:
+#                             matched_count+=1
+#                            # print("matched count={}".format(matched_count))
+#                         else:
+#                             unmatched_count+=1
+#                             print("unmatched count={}".format(unmatched_count))
+#                 else:
+#                     if compareExternalEvents(event1, event2) == True:
+#                         matched_count+=1
+#                       #  print("matched count={}".format(matched_count))
+#                     else:
+#                         unmatched_count+=1
+#                         print("unmatched count={}".format(unmatched_count))
+#     print("Matched count:{}".format(matched_count))
+#     print("Unmatched count:{}".format(unmatched_count))
+
+def comparePrimeAndLog(number, log):
+    gmpy2.get_context().precision = 80000
+    if abs(number - gmpy2.exp(log)) < acceptable_difference:
+        return  True
+    else:
+        return  False
+
 def compareEvents(eventList):
     matched_count=0
     unmatched_count=0
-    for event1 in eventList:
-        for event2 in eventList:
-            if event1 != event2:
-                if event1.eventType =='I' and event2.eventType =='I' :
-                    if compareInternalEvent(event1, event2) == True:
-                        matched_count+=1
-                        #print("matched count={}".format(matched_count))
-                    else:
-                        unmatched_count+=1
-                        print("unmatched count={}".format(unmatched_count))
-                elif (event1.eventType =='E' and event2.eventType =='I') or (event1.eventType =='I' and event2.eventType =='E'):
-                    if event1.eventType=='I':
-                        if compareInternalAndExternalEvent(event1, event2) == True:
-                            matched_count+=1
-                          #  print("matched count={}".format(matched_count))
-                        else:
-                            unmatched_count+=1
-                            print("unmatched count={}".format(unmatched_count))
-                    else:
-                        if compareInternalAndExternalEvent(event2, event1) == True:
-                            matched_count+=1
-                           # print("matched count={}".format(matched_count))
-                        else:
-                            unmatched_count+=1
-                            print("unmatched count={}".format(unmatched_count))
-                else:
-                    if compareExternalEvents(event1, event2) == True:
-                        matched_count+=1
-                      #  print("matched count={}".format(matched_count))
-                    else:
-                        unmatched_count+=1
-                        print("unmatched count={}".format(unmatched_count))
+    for event in eventList:
+        if event.eventType == 'I':
+            if comparePrimeAndLog(event.SendTimeStamp.primeClock, event.SendTimeStamp.logClock) == True:
+                matched_count+=1
+            else:
+                unmatched_count+=1
+        else:
+            if comparePrimeAndLog(event.ReceiveTimeStamp.primeClock, event.ReceiveTimeStamp.logClock) == True:
+                matched_count+=1
+            else:
+                unmatched_count+=1
+
+            if comparePrimeAndLog(event.SendTimeStamp.primeClock, event.SendTimeStamp.logClock) == True:
+                matched_count+=1
+            else:
+                unmatched_count+=1
+
+
     print("Matched count:{}".format(matched_count))
     print("Unmatched count:{}".format(unmatched_count))
 
 class Process(object):
     """docstring for Process"""
+    biggest_prime_clock = 0
+    biggest_log_clock = 0p
 
     def __init__(self, processId, primeNumber):
         super(Process, self).__init__()
@@ -298,16 +341,27 @@ class Process(object):
     def internal_event(self, event):
         self.vectorClock[self.processId - 1] += 1
         self.primeClock = multiply(self.primeClock, self.primeNumber)
+        if self.primeClock > Process.biggest_prime_clock:
+            Process.biggest_prime_clock = self.primeClock
+
         self.logClock = add(self.logClock ,self.logPrime)
         self.logClock = roundAntiLogAndReturn( self.logClock )
+        if self.logClock > Process.biggest_log_clock:
+            Process.biggest_log_clock = self.logClock
+
         self.logicalTime += 1
         event.SendTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock))
 
     def send_event(self, event):
         self.vectorClock[self.processId - 1] += 1
         self.primeClock = multiply(self.primeClock, self.primeNumber)
+        if self.primeClock > Process.biggest_prime_clock:
+            Process.biggest_prime_clock = self.primeClock
+
         self.logClock = add(self.logClock , self.logPrime)
         self.logClock = roundAntiLogAndReturn(self.logClock)
+        if self.logClock > Process.biggest_log_clock:
+            Process.biggest_log_clock = self.logClock
 
         event.SendTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock))
         event.receiveStartTime = self.logicalTime
@@ -327,6 +381,9 @@ class Process(object):
         #setting prime number
         self.primeClock = getLCM(self.primeClock, sendTimeStamp.primeClock)
         self.primeClock = multiply(self.primeClock, self.primeNumber)
+        if self.primeClock > Process.biggest_prime_clock:
+            Process.biggest_prime_clock = self.primeClock
+
 
         #setting log clock
         gcd  = getGCD(antilog(self.logClock), antilog(sendTimeStamp.logClock))
@@ -334,6 +391,8 @@ class Process(object):
         self.logClock= sub(self.logClock, log(gcd))
         self.logClock = add(self.logClock, self.logPrime)
         self.logClock = roundAntiLogAndReturn(self.logClock)
+        if self.logClock > Process.biggest_log_clock:
+            Process.biggest_log_clock = self.logClock
 
         event.ReceiveTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock))
         #self.instances[event.receiveProcessId - 1].receiver_queue.append(event)
@@ -396,5 +455,7 @@ while logical_time <= number_of_processes * number_of_events_process:
 
     logical_time += 1
 
+print("Biggest prime clock :{}".format(Process.biggest_prime_clock))
+print("Biggest log clock :{}".format(Process.biggest_log_clock.__str__()))
 print("Starting with comparison")
 compareEvents(eventList)
