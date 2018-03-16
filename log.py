@@ -5,24 +5,19 @@ from gmpy2 import mpfr
 from gmpy2 import mpz
 from gmpy2 import rint_round
 from collections import deque
-import bitstring
-from bitstring import BitArray
 
-gmpy2.get_context().precision = 2048*2
+gmpy2.get_context().precision = 4094*4
 floating_precision = 64
 
 number_of_processes = 30
-number_of_events_process = 50
-acceptable_difference =0.01
+number_of_events_process = 100
+acceptable_difference =0.00001
 file_delimiter="|"
-rerun = "Y"
+rerun = "N"
 event_file_name ="events.txt"
 
 def getPrecisionWithLimit(num):
     return num
-    #print(num)
-    #print( mpfr(BitArray(float=num, length=floating_precision).float))
-    #return mpfr(BitArray(float=num, length=floating_precision).float)
 
 def generate_event():
     if rerun == "Y":
@@ -179,17 +174,17 @@ def antilog(a):
 
 def isEventCausal_VectorClock(array1, array2):
     for i in range(len(array1)):
-        if array1[i] < array2[i]:
+        if array2[i] < array1[i]:
             return False
     return True
 
 def isEventCausal_PrimeClock(prime1, prime2):
-    if prime1 % prime2 ==0:
+    if prime2 % prime1 ==0:
         return True
     return False
 
 def isEventCausal_LogClock(log1, log2):
-    diff = sub(log1, log2)
+    diff = sub(log2, log1)
     if diff < 0:
         return False
     if abs(rint_round(gmpy2.exp(diff)) - gmpy2.exp(diff)) < acceptable_difference:
@@ -297,31 +292,99 @@ def comparePrimeAndLog(number, log):
 def compareEvents(eventList):
     matched_count=0
     unmatched_count=0
-    for event in eventList:
-        if event.eventType == 'I':
-            if comparePrimeAndLog(event.SendTimeStamp.primeClock, event.SendTimeStamp.logClock) == True:
-                matched_count+=1
+
+    error_events=  set()
+
+    outer_index = 0
+    while outer_index <  len(eventList):
+        event1 = eventList[outer_index]
+
+        first_event_detection = None
+        isLogCausal = False
+        isVectorCausal  = False
+        inner_index = outer_index+1
+
+        while inner_index < len(eventList):
+            event2 = eventList[inner_index]
+
+            if event1.eventType == 'I' and event2.eventType == 'I':
+                if isEventCausal_VectorClock(event1.SendTimeStamp.vectorClock, event2.SendTimeStamp.vectorClock) == True:
+                   # isVectorCausal = True
+                    if isEventCausal_LogClock(event1.SendTimeStamp.logClock, event2.SendTimeStamp.logClock) == True:
+                        #matched_count+=1
+                    #    isLogCausal= True
+                        if first_event_detection == None:
+                            first_event_detection = True
+                    else:
+                        if first_event_detection == None:
+                            first_event_detection = False
+                        elif first_event_detection == True:
+                            if event2.eventId not in error_events:
+                                error_events.add(event2.eventId)
+                     #   isLogCausal=False
+
             else:
-                unmatched_count+=1
+            #elif (event1.eventType =='E' and event2.eventType =='I') or (event1.eventType =='I' and event2.eventType =='E'):
+                #if event1.eventType=='I':
+                if isEventCausal_VectorClock(event1.SendTimeStamp.vectorClock,
+                                             event2.SendTimeStamp.vectorClock) == True:
+                    #isVectorCausal = True
+                    if isEventCausal_LogClock(event1.SendTimeStamp.logClock,
+                                              event2.SendTimeStamp.logClock) == True:
+                        if first_event_detection == None:
+                            first_event_detection = True
+                     #   isLogCausal = True
+                      #  break
+                    else:
+                        if first_event_detection == None:
+                            first_event_detection = False
+                        elif first_event_detection == True:
+                            if event2.eventId not in error_events:
+                                error_events.add(event2.eventId)
+                      #  isLogCausal = False
+                       # break
+                            #only care about send event of event2. if event1 is not causal with send of event2, why would it be causal with receive event of event2
+
+            inner_index+=1
+
+        if (first_event_detection == True or first_event_detection==None) and (event1.eventId not in error_events):
+            matched_count+=1
         else:
-            if comparePrimeAndLog(event.ReceiveTimeStamp.primeClock, event.ReceiveTimeStamp.logClock) == True:
-                matched_count+=1
-            else:
-                unmatched_count+=1
+            unmatched_count+=1
 
-            if comparePrimeAndLog(event.SendTimeStamp.primeClock, event.SendTimeStamp.logClock) == True:
-                matched_count+=1
-            else:
-                unmatched_count+=1
-
+        outer_index+=1
 
     print("Matched count:{}".format(matched_count))
     print("Unmatched count:{}".format(unmatched_count))
 
+# def compareEvents(eventList):
+#     matched_count=0
+#     unmatched_count=0
+#     for event in eventList:
+#         if event.eventType == 'I':
+#             if comparePrimeAndLog(event.SendTimeStamp.primeClock, event.SendTimeStamp.logClock) == True:
+#                 matched_count+=1
+#             else:
+#                 unmatched_count+=1
+#         else:
+#             if comparePrimeAndLog(event.ReceiveTimeStamp.primeClock, event.ReceiveTimeStamp.logClock) == True:
+#                 matched_count+=1
+#             else:
+#                 unmatched_count+=1
+#
+#             if comparePrimeAndLog(event.SendTimeStamp.primeClock, event.SendTimeStamp.logClock) == True:
+#                 matched_count+=1
+#             else:
+#                 unmatched_count+=1
+#
+#
+#     print("Matched count:{}".format(matched_count))
+#     print("Unmatched count:{}".format(unmatched_count))
+
 class Process(object):
     """docstring for Process"""
     biggest_prime_clock = 0
-    biggest_log_clock = 0p
+    biggest_log_clock = 0
 
     def __init__(self, processId, primeNumber):
         super(Process, self).__init__()
