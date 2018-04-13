@@ -2,19 +2,30 @@ import gmpy2
 import random
 import csv
 from gmpy2 import mpfr
-from gmpy2 import mpz
+from gmpy2 import mpz, gcd
 from gmpy2 import rint_round
 from collections import deque
 
-gmpy2.get_context().precision = 4094*4
-floating_precision = 64
 
-number_of_processes = 30
-number_of_events_process = 100
-acceptable_difference =0.00001
+floating_precision = 4000
+
+number_of_processes = 5
+number_of_events_process = 5
+#acceptable_difference = pow(10, -15)
+acceptable_difference = 0.000000000000000000001
+integral_precision_scratch_space = number_of_processes*number_of_events_process*100
+logarithm_precision_persistent = 64
+probability_internal=20
+
 file_delimiter="|"
-rerun = "N"
+rerun = "Y"
 event_file_name ="events.txt"
+
+def set_integral_precision_scratch_space():
+    gmpy2.get_context().precision=integral_precision_scratch_space
+
+def set_logarithmic_precision_persistent():
+    gmpy2.get_context().precision = logarithm_precision_persistent
 
 def getPrecisionWithLimit(num):
     return num
@@ -29,17 +40,23 @@ def generate_event():
         eventList = []
         for eventId in range(1, (number_of_processes * number_of_events_process) + 1):
             senderProcess = getRandomProcess()
-            if random.randint(1, 3) == 1:
+            if random.randint(1, 100) < probability_internal and internalEventCount < ((number_of_processes * number_of_events_process)*probability_internal/100):
                 # internal event
                 event = Event(eventId, "I", senderProcess, "", futureLogicalTaskTime)
                 # print event
                 eventList.append(event)
                 internalEventCount+=1
             else:
-                event = Event(eventId, "E", senderProcess, getRandomReceiveProcess(senderProcess), futureLogicalTaskTime)
-                # print event
-                eventList.append(event)
-                externalEventCount+=1
+                if externalEventCount >= ((number_of_processes * number_of_events_process) - 100/probability_internal):
+                    event = Event(eventId, "I", senderProcess, "", futureLogicalTaskTime)
+                    # print event
+                    eventList.append(event)
+                    internalEventCount += 1
+                else:
+                    event = Event(eventId, "E", senderProcess, getRandomReceiveProcess(senderProcess), futureLogicalTaskTime)
+                    # print event
+                    eventList.append(event)
+                    externalEventCount+=1
             futureLogicalTaskTime = futureLogicalTaskTime + 1
         print("Count of internal events:{}".format(internalEventCount))
         print("Count of external events:{}".format(externalEventCount))
@@ -125,12 +142,13 @@ def getProcesses():
 
 
 class TimeStamp(object):
-    def __init__(self, vectorClock, primeClock, logClock):
+    def __init__(self, vectorClock, primeClock, logClock,primeNumber, receivedPrimes):
         super(TimeStamp, self).__init__()
         self.vectorClock = vectorClock
         self.primeClock = primeClock
         self.logClock = logClock
-
+        self.primeNumber = primeNumber
+        self.receivedPrimes = receivedPrimes
     def __str__(self):
         return "Log Clock: {}, Prime Clock: {}, Vector Clock:{}".format(self.logClock, self.primeClock,
                                                                         self.vectorClock)
@@ -152,13 +170,23 @@ class Event(object):
             self.eventId, self.eventType, self.sendProcessId, self.receiveProcessId, self.sendStartTime)
 
 def getGCD(a,b):
-    return gmpy2.gcd(mpz(rint_round(a)), gmpy2.mpz(rint_round(b)))
+    num1 = mpz(rint_round(a))
+    num2= mpz(rint_round(b))
+
+    if num2%num1 ==0:
+        return num1
+
+    gcd_a_b =  gcd(num1, num2)
+    return gcd_a_b
 
 def getLCM(a,b):
     return gmpy2.lcm(mpz(a), mpz(b))
 
 def multiply(a,b):
     return gmpy2.mul(a,b)
+
+def div(a,b):
+    return gmpy2.div(a,b)
 
 def add(a,b):
     return gmpy2.add(a,b)
@@ -172,58 +200,139 @@ def log(a):
 def antilog(a):
     return gmpy2.exp(a)
 
+#vh < vk ⇔ vh ≤ vk and ∃x : vh[x] < vk[x]
 def isEventCausal_VectorClock(array1, array2):
+    #define a variable for some index which has to be lower
+    lower_index = -1
+
     for i in range(len(array1)):
-        if array2[i] < array1[i]:
+
+        #check if the
+        if array1[i] < array2[i]:
+            lower_index = i
+        elif array2[i] < array1[i]:
             return False
-    return True
+
+    if lower_index != -1 :
+        return True
+    else:
+        return False
+
 
 def isEventCausal_PrimeClock(prime1, prime2):
     if prime2 % prime1 ==0:
         return True
     return False
 
-def isEventCausal_LogClock(log1, log2):
-    diff = sub(log2, log1)
-    if diff < 0:
-        return False
-    if abs(rint_round(gmpy2.exp(diff)) - gmpy2.exp(diff)) < acceptable_difference:
+def nearest_multiple(number, multiple):
+    remainder = number % multiple
+    if remainder > div(multiple, 2):
+        number = number + (multiple - remainder)
+        # round up
+    else:
+        number = number - remainder
+        # round down
+    return number
+
+def resetLogToNearestMultiple(logClock, receivedPrimes):
+    dec = antilog(logClock)
+    dec = nearest_multiple(dec, multiply_array(receivedPrimes))
+    return log(dec)
+
+def multiply_array(num_array):
+    result = mpfr(1);
+    for number in num_array:
+        result  = multiply(result, number)
+    return result
+
+def isEventCausal_LogClock(log1, log2, prime1, prime2, receivedPrimes1, receivedPrimes2):
+    set_integral_precision_scratch_space()
+    #convert log1 to nearest multiple of prime1
+    dec1= antilog(log1)
+    dec1 = nearest_multiple(dec1, multiply_array(receivedPrimes1))
+
+    # convert log2 to nearest multiple of prime1
+    dec2 = antilog(log2)
+    dec2 = nearest_multiple(dec2,  multiply_array(receivedPrimes2))
+
+    if dec2 % dec1 ==0:
+        set_logarithmic_precision_persistent()
         return True
+    set_logarithmic_precision_persistent()
     return False
+
+    # diff = sub(log2, log1)
+    # if diff < 0:
+    #     return False
+    #
+    # isCausal = False
+    #
+    # exp_value = gmpy2.exp(diff)
+    # rounded_exp_value  = rint_round(exp_value)
+    #
+    # a = multiply(exp_value, gmpy2.exp(log1))
+    # b = multiply(rounded_exp_value, gmpy2.exp(log1))
+    #
+    # if div(abs(sub(a,b)), a) < acceptable_difference :
+    #     isCausal = True
+    #
+    # return isCausal
+
+# def isEventCausal_LogClock(log1, log2):
+#
+#     diff = sub(log2, log1)
+#     if diff < 0:
+#         return False
+#
+#     isCausal = False
+#     if abs(sub(rint_round(gmpy2.exp(diff)), gmpy2.exp(diff))) < acceptable_difference:
+#         isCausal =  True
+#     return isCausal
+
 
 def compareInternalEvent(event1, event2):
     timestamp1 = event1.SendTimeStamp
     timestamp2 = event2.SendTimeStamp
 
-    if compareAndReturnResult(timestamp1,timestamp2) == False:
+    result = compareAndReturnResult(timestamp1, timestamp2)
+    if result != 0:
         #print("Not matched")
         compareAndReturnResult(timestamp1, timestamp2)
-        return False
-
-    return True
+        return result
+    return 0
 
 def compareAndReturnResult(timestamp1, timestamp2):
     isVectorClockCausal = isEventCausal_VectorClock(timestamp1.vectorClock, timestamp2.vectorClock)
     isPrimeClockCausal = isEventCausal_PrimeClock(timestamp1.primeClock, timestamp2.primeClock)
-    isLogClockCausal = isEventCausal_LogClock(timestamp1.logClock, timestamp2.logClock)
+    isLogClockCausal = isEventCausal_LogClock(timestamp1.logClock, timestamp2.logClock, timestamp1.primeNumber, timestamp2.primeNumber, timestamp1.receivedPrimes, timestamp2.receivedPrimes)
 
     if isVectorClockCausal == isLogClockCausal:
         #matched_count+=1
-        return True
+        return 0
     else :
-        return False
+        #if vector clock is true, and log is false, it is a wrong result
+        # if vector clock is false, and log is true, it is a false positive
+        if isVectorClockCausal is True:
+            return 1
+        else :
+            return 2
 
 def compareInternalAndExternalEvent(internalEvent, externalEvent):
     timestamps = [internalEvent.SendTimeStamp, externalEvent.SendTimeStamp, externalEvent.ReceiveTimeStamp]
 
+    if internalEvent.eventId == 1 and externalEvent.eventId == 96:
+        print("")
+
     for timestamp1 in timestamps:
         for timestamp2 in timestamps:
             if timestamp1 != timestamp2:
-                if compareAndReturnResult(timestamp1, timestamp2) == False:
+                result = compareAndReturnResult(timestamp1, timestamp2)
+                if  result != 0 :
                     #print("Not matched")
                     compareAndReturnResult(timestamp1, timestamp2)
-                    return False
-    return True
+                    return result
+    return 0
+    #return True
 
 
 def compareExternalEvents(event1, event2):
@@ -237,50 +346,72 @@ def compareExternalEvents(event1, event2):
     for timestamp1 in timestamps:
         for timestamp2 in timestamps:
             if timestamp1 != timestamp2:
-                if compareAndReturnResult(timestamp1, timestamp2) == False:
+                result = compareAndReturnResult(timestamp1, timestamp2)
+                if result != 0 :
                    # print("Not matched")
                     compareAndReturnResult(timestamp1, timestamp2)
-                    return False
+                    return result
+    return 0
+    # return  True
 
-    return  True
+def compareEvents(eventList):
+    matched_count=0
+    unmatched_count=0
+    outer_event_index  = 0
 
-# def compareEvents(eventList):
-#     matched_count=0
-#     unmatched_count=0
-#     for event1 in eventList:
-#         for event2 in eventList:
-#             if event1 != event2:
-#                 if event1.eventType =='I' and event2.eventType =='I' :
-#                     if compareInternalEvent(event1, event2) == True:
-#                         matched_count+=1
-#                         #print("matched count={}".format(matched_count))
-#                     else:
-#                         unmatched_count+=1
-#                         print("unmatched count={}".format(unmatched_count))
-#                 elif (event1.eventType =='E' and event2.eventType =='I') or (event1.eventType =='I' and event2.eventType =='E'):
-#                     if event1.eventType=='I':
-#                         if compareInternalAndExternalEvent(event1, event2) == True:
-#                             matched_count+=1
-#                           #  print("matched count={}".format(matched_count))
-#                         else:
-#                             unmatched_count+=1
-#                             print("unmatched count={}".format(unmatched_count))
-#                     else:
-#                         if compareInternalAndExternalEvent(event2, event1) == True:
-#                             matched_count+=1
-#                            # print("matched count={}".format(matched_count))
-#                         else:
-#                             unmatched_count+=1
-#                             print("unmatched count={}".format(unmatched_count))
-#                 else:
-#                     if compareExternalEvents(event1, event2) == True:
-#                         matched_count+=1
-#                       #  print("matched count={}".format(matched_count))
-#                     else:
-#                         unmatched_count+=1
-#                         print("unmatched count={}".format(unmatched_count))
-#     print("Matched count:{}".format(matched_count))
-#     print("Unmatched count:{}".format(unmatched_count))
+    false_positives = 0
+    wrong_results = 0
+
+    while outer_event_index < len(eventList):
+        event1 = eventList[outer_event_index]
+        inner_event_index = outer_event_index+1
+        while inner_event_index < len(eventList):
+
+            event2 = eventList[inner_event_index]
+
+            if event1.eventType =='I' and event2.eventType =='I' :
+                result = compareInternalEvent(event1, event2)
+
+                if result == 0:
+                    matched_count += 1
+                elif result == 1:
+                    wrong_results += 1
+                else:
+                    false_positives += 1
+            elif (event1.eventType =='E' and event2.eventType =='I') or (event1.eventType =='I' and event2.eventType =='E'):
+
+
+                if event1.eventType=='I':
+                    result = compareInternalAndExternalEvent(event1, event2)
+                    if result == 0:
+                        matched_count += 1
+                    elif result == 1:
+                        wrong_results += 1
+                    else:
+                        false_positives += 1
+                else:
+                    result = compareInternalAndExternalEvent(event2, event1)
+                    if result == 0:
+                        matched_count += 1
+                    elif result == 1:
+                        wrong_results += 1
+                    else:
+                        false_positives += 1
+            else:
+                result = compareExternalEvents(event1, event2)
+                if result == 0:
+                    matched_count+=1
+                elif result == 1:
+                    wrong_results+=1
+                else:
+                    false_positives+=1
+
+            inner_event_index+=1
+        outer_event_index+=1
+
+    print("Matched count:{}".format(matched_count))
+    print("Wrong results:{}".format(wrong_results))
+    print("False positives:{}".format(false_positives))
 
 def comparePrimeAndLog(number, log):
     gmpy2.get_context().precision = 80000
@@ -289,73 +420,72 @@ def comparePrimeAndLog(number, log):
     else:
         return  False
 
-def compareEvents(eventList):
-    matched_count=0
-    unmatched_count=0
-
-    error_events=  set()
-
-    outer_index = 0
-    while outer_index <  len(eventList):
-        event1 = eventList[outer_index]
-
-        first_event_detection = None
-        isLogCausal = False
-        isVectorCausal  = False
-        inner_index = outer_index+1
-
-        while inner_index < len(eventList):
-            event2 = eventList[inner_index]
-
-            if event1.eventType == 'I' and event2.eventType == 'I':
-                if isEventCausal_VectorClock(event1.SendTimeStamp.vectorClock, event2.SendTimeStamp.vectorClock) == True:
-                   # isVectorCausal = True
-                    if isEventCausal_LogClock(event1.SendTimeStamp.logClock, event2.SendTimeStamp.logClock) == True:
-                        #matched_count+=1
-                    #    isLogCausal= True
-                        if first_event_detection == None:
-                            first_event_detection = True
-                    else:
-                        if first_event_detection == None:
-                            first_event_detection = False
-                        elif first_event_detection == True:
-                            if event2.eventId not in error_events:
-                                error_events.add(event2.eventId)
-                     #   isLogCausal=False
-
-            else:
-            #elif (event1.eventType =='E' and event2.eventType =='I') or (event1.eventType =='I' and event2.eventType =='E'):
-                #if event1.eventType=='I':
-                if isEventCausal_VectorClock(event1.SendTimeStamp.vectorClock,
-                                             event2.SendTimeStamp.vectorClock) == True:
-                    #isVectorCausal = True
-                    if isEventCausal_LogClock(event1.SendTimeStamp.logClock,
-                                              event2.SendTimeStamp.logClock) == True:
-                        if first_event_detection == None:
-                            first_event_detection = True
-                     #   isLogCausal = True
-                      #  break
-                    else:
-                        if first_event_detection == None:
-                            first_event_detection = False
-                        elif first_event_detection == True:
-                            if event2.eventId not in error_events:
-                                error_events.add(event2.eventId)
-                      #  isLogCausal = False
-                       # break
-                            #only care about send event of event2. if event1 is not causal with send of event2, why would it be causal with receive event of event2
-
-            inner_index+=1
-
-        if (first_event_detection == True or first_event_detection==None) and (event1.eventId not in error_events):
-            matched_count+=1
-        else:
-            unmatched_count+=1
-
-        outer_index+=1
-
-    print("Matched count:{}".format(matched_count))
-    print("Unmatched count:{}".format(unmatched_count))
+# def compareEvents(eventList):
+#     matched_count=0
+#     unmatched_count=0
+#
+#     error_events=  set()
+#
+#     outer_index = 0
+#     while outer_index <  len(eventList):
+#         event1 = eventList[outer_index]
+#
+#         first_event_detection = None
+#         isLogCausal = False
+#         isVectorCausal  = False
+#         inner_index = outer_index+1
+#
+#         while inner_index < len(eventList):
+#             event2 = eventList[inner_index]
+#
+#             if event1.eventType == 'I' and event2.eventType == 'I':
+#                 if isEventCausal_VectorClock(event1.SendTimeStamp.vectorClock, event2.SendTimeStamp.vectorClock) == True:
+#                    # isVectorCausal = True
+#                     if isEventCausal_LogClock(event1.SendTimeStamp.logClock, event2.SendTimeStamp.logClock) == True:
+#                         #matched_count+=1
+#                     #    isLogCausal= True
+#                         if first_event_detection == None:
+#                             first_event_detection = True
+#                     else:
+#                         if first_event_detection == None:
+#                             first_event_detection = False
+#                         elif first_event_detection == True:
+#                             if event2.eventId not in error_events:
+#                                 error_events.add(event2.eventId)
+#                      #   isLogCausal=False
+#             else:
+#             #elif (event1.eventType =='E' and event2.eventType =='I') or (event1.eventType =='I' and event2.eventType =='E'):
+#                 #if event1.eventType=='I':
+#                 if isEventCausal_VectorClock(event1.SendTimeStamp.vectorClock,
+#                                              event2.SendTimeStamp.vectorClock) == True:
+#                     #isVectorCausal = True
+#                     if isEventCausal_LogClock(event1.SendTimeStamp.logClock,
+#                                               event2.SendTimeStamp.logClock) == True:
+#                         if first_event_detection == None:
+#                             first_event_detection = True
+#                      #   isLogCausal = True
+#                       #  break
+#                     else:
+#                         if first_event_detection == None:
+#                             first_event_detection = False
+#                         elif first_event_detection == True:
+#                             if event2.eventId not in error_events:
+#                                 error_events.add(event2.eventId)
+#                       #  isLogCausal = False
+#                        # break
+#                             #only care about send event of event2. if event1 is not causal with send of event2, why would it be causal with receive event of event2
+#
+#             inner_index+=1
+#
+#         if (first_event_detection == True or first_event_detection==None) and (event1.eventId not in error_events):
+#             matched_count+=1
+#         else:
+#             unmatched_count+=1
+#
+#         outer_index+=1
+#
+#     print("Matched count:{}".format(matched_count))
+#     print("Unmatched count:{}".format(unmatched_count))
 
 # def compareEvents(eventList):
 #     matched_count=0
@@ -381,6 +511,9 @@ def compareEvents(eventList):
 #     print("Matched count:{}".format(matched_count))
 #     print("Unmatched count:{}".format(unmatched_count))
 
+
+
+
 class Process(object):
     """docstring for Process"""
     biggest_prime_clock = 0
@@ -397,9 +530,22 @@ class Process(object):
         self.logPrime = gmpy2.log(primeNumber)
         self.queue = deque()
         self.receiver_queue = deque()
+        self.receivedPrimes = set()
+        self.receivedPrimes.add(self.primeNumber)
 
     def set_other_processes_instances(self, instances):
         self.instances = instances
+
+    # def reset_log_value(self,logClock, primeNumber, senderPrimeNumber):
+    #     decAntilog = antilog(logClock)
+    #     remainder = decAntilog%(primeNumber*senderPrimeNumber)
+    #     if remainder > div(primeNumber*senderPrimeNumber,2):
+    #         decAntilog = decAntilog+((primeNumber*senderPrimeNumber)-remainder)
+    #         #round up
+    #     else:
+    #         decAntilog = decAntilog-remainder
+    #         #round down
+    #     return log(decAntilog)
 
     def internal_event(self, event):
         self.vectorClock[self.processId - 1] += 1
@@ -412,8 +558,10 @@ class Process(object):
         if self.logClock > Process.biggest_log_clock:
             Process.biggest_log_clock = self.logClock
 
+        self.logClock = resetLogToNearestMultiple(self.logClock, self.receivedPrimes)
+
         self.logicalTime += 1
-        event.SendTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock))
+        event.SendTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock), self.primeNumber, copyOf(self.receivedPrimes))
 
     def send_event(self, event):
         self.vectorClock[self.processId - 1] += 1
@@ -423,16 +571,22 @@ class Process(object):
 
         self.logClock = add(self.logClock , self.logPrime)
         self.logClock = roundAntiLogAndReturn(self.logClock)
+        self.logClock = resetLogToNearestMultiple(self.logClock, self.receivedPrimes)
+
         if self.logClock > Process.biggest_log_clock:
             Process.biggest_log_clock = self.logClock
 
-        event.SendTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock))
+        event.SendTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock), self.primeNumber, copyOf(self.receivedPrimes))
         event.receiveStartTime = self.logicalTime
         self.instances[event.receiveProcessId - 1].receiver_queue.append(event)
         self.logicalTime += 1
 
     def receive_event(self, event):
+        if event.eventId == 19:
+            print("19 is here")
         sendTimeStamp = event.SendTimeStamp
+
+        self.receivedPrimes.add(event.SendTimeStamp.primeNumber)
 
         #setting the vector clock
         for index in range(len(sendTimeStamp.vectorClock)):
@@ -457,7 +611,12 @@ class Process(object):
         if self.logClock > Process.biggest_log_clock:
             Process.biggest_log_clock = self.logClock
 
-        event.ReceiveTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock))
+
+
+        #self.logClock =  self.reset_log_value(self.logClock, self.primeNumber, sendTimeStamp.primeNumber)
+        self.logClock = resetLogToNearestMultiple(self.logClock, self.receivedPrimes)
+
+        event.ReceiveTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock),self.primeNumber, copyOf(self.receivedPrimes))
         #self.instances[event.receiveProcessId - 1].receiver_queue.append(event)
         self.logicalTime += 1
 
@@ -478,6 +637,8 @@ class Process(object):
                 if event.sendStartTime <= logical_time:
                     return self.queue.popleft()
 
+
+set_logarithmic_precision_persistent()
 eventList = generate_event()
 #saveEvent(eventList)
 print([str(event) for event in eventList])
