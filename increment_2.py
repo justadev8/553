@@ -14,14 +14,15 @@ number_of_events_process = 10
 #acceptable_difference = pow(10, -15)
 acceptable_difference = 0.000000000000000000001
 integral_precision_scratch_space = number_of_processes*number_of_events_process*100
-logarithm_precision_persistent = 640000
+logarithm_precision_persistent = 64
 probability_internal=20
 
 file_delimiter="|"
-rerun = "N"
+rerun = "Y"
 event_file_name ="events.txt"
 
 def set_integral_precision_scratch_space():
+
     gmpy2.get_context().precision=integral_precision_scratch_space
 
 def set_logarithmic_precision_persistent():
@@ -189,7 +190,10 @@ def log(a):
     return gmpy2.log(a)
 
 def antilog(a):
-    return gmpy2.exp(a)
+    set_integral_precision_scratch_space()
+    result = gmpy2.exp(a)
+    set_logarithmic_precision_persistent()
+    return result
 
 #vh < vk ⇔ vh ≤ vk and ∃x : vh[x] < vk[x]
 def isEventCausal_VectorClock(array1, array2):
@@ -406,6 +410,7 @@ def compareEvents(eventList):
     wrong_results = 0
 
     while outer_event_index < len(eventList):
+        print(outer_event_index)
         event1 = eventList[outer_event_index]
         inner_event_index = outer_event_index+1
         while inner_event_index < len(eventList):
@@ -455,6 +460,7 @@ def compareEvents(eventList):
     print("Matched count:{}".format(matched_count))
     print("Wrong results:{}".format(wrong_results))
     print("False positives:{}".format(false_positives))
+    print("Matched percent :{}".format(matched_count*100/(matched_count+wrong_results+false_positives)))
 
 def comparePrimeAndLog(number, log):
     gmpy2.get_context().precision = 80000
@@ -573,8 +579,8 @@ class Process(object):
         self.logPrime = gmpy2.log(primeNumber)
         self.queue = deque()
         self.receiver_queue = deque()
-        self.receivedPrimes = set()
-        self.receivedPrimes.add(self.primeNumber)
+        self.receivedPrimes = list()
+        self.receivedPrimes.append(self.primeNumber)
 
     def set_other_processes_instances(self, instances):
         self.instances = instances
@@ -646,7 +652,7 @@ class Process(object):
         gcd = getGCD(decLogClock, decSenderLogClock)
         #gcd  = getGCD(antilog(self.logClock), antilog(sendTimeStamp.logClock))
 
-        self.receivedPrimes.add(event.SendTimeStamp.primeNumber)
+        self.receivedPrimes.append(event.SendTimeStamp.primeNumber)
 
         self.logClock = add(log(decLogClock) , log(decSenderLogClock))
         self.logClock = sub(self.logClock, log(gcd))

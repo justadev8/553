@@ -18,7 +18,7 @@ logarithm_precision_persistent = 640000
 probability_internal=20
 
 file_delimiter="|"
-rerun = "N"
+rerun = "Y"
 event_file_name ="events.txt"
 
 def set_integral_precision_scratch_space():
@@ -455,6 +455,7 @@ def compareEvents(eventList):
     print("Matched count:{}".format(matched_count))
     print("Wrong results:{}".format(wrong_results))
     print("False positives:{}".format(false_positives))
+    print("Matched percent :{}".format(matched_count*100/(matched_count+wrong_results+false_positives)))
 
 def comparePrimeAndLog(number, log):
     gmpy2.get_context().precision = 80000
@@ -573,8 +574,8 @@ class Process(object):
         self.logPrime = gmpy2.log(primeNumber)
         self.queue = deque()
         self.receiver_queue = deque()
-        self.receivedPrimes = set()
-        self.receivedPrimes.add(self.primeNumber)
+        self.receivedPrimes = list()
+        self.receivedPrimes.append(self.primeNumber)
 
     def set_other_processes_instances(self, instances):
         self.instances = instances
@@ -646,7 +647,7 @@ class Process(object):
         gcd = getGCD(decLogClock, decSenderLogClock)
         #gcd  = getGCD(antilog(self.logClock), antilog(sendTimeStamp.logClock))
 
-        self.receivedPrimes.add(event.SendTimeStamp.primeNumber)
+        self.receivedPrimes.append(event.SendTimeStamp.primeNumber)
 
         self.logClock = add(log(decLogClock) , log(decSenderLogClock))
         self.logClock = sub(self.logClock, log(gcd))

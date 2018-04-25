@@ -12,13 +12,13 @@ floating_precision = 4000
 number_of_processes = 10
 number_of_events_process = 10
 #acceptable_difference = pow(10, -15)
-acceptable_difference = 0.000000000000000000001
+acceptable_difference = 0.8
 integral_precision_scratch_space = number_of_processes*number_of_events_process*100
-logarithm_precision_persistent = 640000
+logarithm_precision_persistent = 64
 probability_internal=20
 
 file_delimiter="|"
-rerun = "N"
+rerun = "Y"
 event_file_name ="events.txt"
 
 def set_integral_precision_scratch_space():
@@ -26,6 +26,10 @@ def set_integral_precision_scratch_space():
 
 def set_logarithmic_precision_persistent():
     gmpy2.get_context().precision = logarithm_precision_persistent
+
+def getPrecisionWithLimit(num):
+    return num
+
 
 def generate_event():
     if rerun == "Y":
@@ -80,6 +84,12 @@ def readEvent():
             eventList.append(Event(int(eventId), eventType, int(senderProcessId), int(receiverProcessId), int(senderStartTime)))
     #records.close()
     return eventList
+
+def roundAntiLogAndReturn(arg):
+    # if abs(rint_round(gmpy2.exp(arg))-gmpy2.exp(arg)) < acceptable_difference :
+    #     return getPrecisionWithLimit(gmpy2.log(rint_round(gmpy2.exp(arg))))
+    # else:
+    return getPrecisionWithLimit(arg)
 
 def getRandomProcess():
     return random.randint(1, number_of_processes)
@@ -164,8 +174,8 @@ def getGCD(a,b):
     num1 = mpz(rint_round(a))
     num2= mpz(rint_round(b))
 
-    # if num2%num1 ==0:
-    #     return num1
+    if num2%num1 ==0:
+        return num1
 
     gcd_a_b =  gcd(num1, num2)
     return gcd_a_b
@@ -189,7 +199,10 @@ def log(a):
     return gmpy2.log(a)
 
 def antilog(a):
-    return gmpy2.exp(a)
+    set_integral_precision_scratch_space()
+    result = gmpy2.exp(a)
+    set_logarithmic_precision_persistent()
+    return result
 
 #vh < vk ⇔ vh ≤ vk and ∃x : vh[x] < vk[x]
 def isEventCausal_VectorClock(array1, array2):
@@ -225,13 +238,6 @@ def nearest_multiple(number, multiple):
         # round down
     return number
 
-def nearest_multiple_array(number, multiple_array):
-    if number == 1:
-        return number
-
-    multiple = multiply_array(multiple_array)
-    return nearest_multiple(number, multiple)
-
 def resetLogToNearestMultiple(logClock, receivedPrimes):
     dec = antilog(logClock)
     dec = nearest_multiple(dec, multiply_array(receivedPrimes))
@@ -244,45 +250,62 @@ def multiply_array(num_array):
     return result
 
 def isEventCausal_LogClock(log1, log2, prime1, prime2, receivedPrimes1, receivedPrimes2):
-
-    if log1 > log2:
-        return False
-
     set_integral_precision_scratch_space()
-    #convert log1 to nearest multiple of prime1
-    dec1= antilog(log1)
-    dec1 = nearest_multiple(dec1, multiply_array(receivedPrimes1))
-
-    # convert log2 to nearest multiple of prime1
-    dec2 = antilog(log2)
-    dec2 = nearest_multiple(dec2,  multiply_array(receivedPrimes2))
-
-    if dec2%dec1 == 0:
-        set_logarithmic_precision_persistent()
-        return True
-    else:
-        set_logarithmic_precision_persistent()
+    diff = sub(log2, log1)
+    if diff < 0:
         return False
-    # closeness = 0.00000000000001 * dec1
-    # remainder = dec2 % dec1
-    # quotient = dec2 / dec1
-    # integral_quotient = rint_round(quotient)
-    # if integral_quotient - quotient < 0.0000001:
-    #     return True
 
-    # if remainder  - closeness <0 or closeness+remainder > dec1:
-    #     return True
-    # return False
+    isCausal = False
+
+    exp_value = gmpy2.exp(diff)
+    nearest_multiple_of_prime = nearest_multiple(multiply(exp_value, prime1), prime1)
+
+    #threshold = 10% of prime1
+    ten_percent_base_multiplier  = multiply(prime1, mpfr('0.0000000005'))
+
+    upper_threshold_value = add(nearest_multiple_of_prime, multiply(nearest_multiple_of_prime, ten_percent_base_multiplier))
+    lower_threshold_value = sub(nearest_multiple_of_prime,multiply(nearest_multiple_of_prime, ten_percent_base_multiplier) )
+    actual_value = multiply(exp_value,prime1)
+
+    if actual_value < upper_threshold_value and actual_value > lower_threshold_value :
+        isCausal = True
+    else:
+        isCausal = False
+
+
+    # if abs(sub(exp_value, rounded_exp_value)    ) < acceptable_difference:
+    #     isCausal = True
+    # else:
+    #     isCausal =   False
+
+    set_logarithmic_precision_persistent()
+
+    return  isCausal
+
+    # a = multiply(exp_value, gmpy2.exp(log1))
+    # b = multiply(rounded_exp_value, gmpy2.exp(log1))
+    #
+    # if div(abs(sub(a, b)), a) < acceptable_difference:
+    #     isCausal = True
+    # set_logarithmic_precision_persistent()
+    #
+    # return isCausal
+
+    #convert log1 to nearest multiple of prime1
+    # dec1= antilog(log1)
+    # dec1 = nearest_multiple(dec1, multiply_array(receivedPrimes1))
+    #
+    # # convert log2 to nearest multiple of prime1
+    # dec2 = antilog(log2)
+    # dec2 = nearest_multiple(dec2,  multiply_array(receivedPrimes2))
+    #
     # if dec2 % dec1 ==0:
     #     set_logarithmic_precision_persistent()
     #     return True
+
     # set_logarithmic_precision_persistent()
     # return False
-
-
-
-
-
+    #
     # diff = sub(log2, log1)
     # if diff < 0:
     #     return False
@@ -342,33 +365,17 @@ def compareAndReturnResult(timestamp1, timestamp2):
 def compareInternalAndExternalEvent(internalEvent, externalEvent):
     timestamps = [internalEvent.SendTimeStamp, externalEvent.SendTimeStamp, externalEvent.ReceiveTimeStamp]
 
-    for outerIndex in range(0,len(timestamps)):
-        timestamp1 = timestamps[outerIndex]
-        innerIndex = outerIndex + 1
-        while(innerIndex < len(timestamps)):
-            timestamp2 = timestamps[innerIndex]
-            result = compareAndReturnResult(timestamp1, timestamp2)
-            if  result != 0 :
-                #print("Not matched")
-                compareAndReturnResult(timestamp1, timestamp2)
-                return result
-            innerIndex = innerIndex+1
-    return 0
-    #return True
+    if internalEvent.eventId == 1 and externalEvent.eventId == 96:
+        print("")
 
-def compareExternalEventAndInternal(externalEvent,internalEvent):
-    timestamps = [externalEvent.SendTimeStamp, externalEvent.ReceiveTimeStamp,internalEvent.SendTimeStamp]
-
-    for outerIndex in range(0,len(timestamps)):
-        timestamp1 = timestamps[outerIndex]
-        innerIndex = outerIndex + 1
-        while(innerIndex < len(timestamps)):
-             timestamp2 = timestamps[innerIndex]
-             result = compareAndReturnResult(timestamp1, timestamp2)
-             if result != 0 :
-                 compareAndReturnResult(timestamp1, timestamp2)
-                 return result
-             innerIndex = innerIndex + 1
+    for timestamp1 in timestamps:
+        for timestamp2 in timestamps:
+            if timestamp1 != timestamp2:
+                result = compareAndReturnResult(timestamp1, timestamp2)
+                if  result != 0 :
+                    #print("Not matched")
+                    compareAndReturnResult(timestamp1, timestamp2)
+                    return result
     return 0
     #return True
 
@@ -381,19 +388,14 @@ def compareExternalEvents(event1, event2):
 
     timestamps  = [sendTimestamp1, sendTimestamp2, receiveTimestamp1, receiveTimestamp2]
 
-    for outerIndex in range(0,len(timestamps)):
-        timestamp1 = timestamps[outerIndex]
-        innerIndex = outerIndex + 1
-        while(innerIndex < len(timestamps)):
-            timestamp2 = timestamps[innerIndex]
-
-            result = compareAndReturnResult(timestamp1, timestamp2)
-            if result != 0:
-                # print("Not matched")
-                compareAndReturnResult(timestamp1, timestamp2)
-                return result
-
-            innerIndex=innerIndex+1
+    for timestamp1 in timestamps:
+        for timestamp2 in timestamps:
+            if timestamp1 != timestamp2:
+                result = compareAndReturnResult(timestamp1, timestamp2)
+                if result != 0 :
+                   # print("Not matched")
+                    compareAndReturnResult(timestamp1, timestamp2)
+                    return result
     return 0
     # return  True
 
@@ -433,7 +435,7 @@ def compareEvents(eventList):
                     else:
                         false_positives += 1
                 else:
-                    result = compareExternalEventAndInternal(event1, event2)
+                    result = compareInternalAndExternalEvent(event2, event1)
                     if result == 0:
                         matched_count += 1
                     elif result == 1:
@@ -455,6 +457,7 @@ def compareEvents(eventList):
     print("Matched count:{}".format(matched_count))
     print("Wrong results:{}".format(wrong_results))
     print("False positives:{}".format(false_positives))
+    print("Matched percent :{}".format(matched_count * 100 / (matched_count + wrong_results + false_positives)))
 
 def comparePrimeAndLog(number, log):
     gmpy2.get_context().precision = 80000
@@ -597,6 +600,7 @@ class Process(object):
             Process.biggest_prime_clock = self.primeClock
 
         self.logClock = add(self.logClock ,self.logPrime)
+        self.logClock = roundAntiLogAndReturn( self.logClock )
         if self.logClock > Process.biggest_log_clock:
             Process.biggest_log_clock = self.logClock
 
@@ -612,6 +616,7 @@ class Process(object):
             Process.biggest_prime_clock = self.primeClock
 
         self.logClock = add(self.logClock , self.logPrime)
+        self.logClock = roundAntiLogAndReturn(self.logClock)
         self.logClock = resetLogToNearestMultiple(self.logClock, self.receivedPrimes)
 
         if self.logClock > Process.biggest_log_clock:
@@ -623,9 +628,9 @@ class Process(object):
         self.logicalTime += 1
 
     def receive_event(self, event):
-        if event.eventId == 19:
-            print("19 is here")
         sendTimeStamp = event.SendTimeStamp
+
+        self.receivedPrimes.add(event.SendTimeStamp.primeNumber)
 
         #setting the vector clock
         for index in range(len(sendTimeStamp.vectorClock)):
@@ -640,28 +645,20 @@ class Process(object):
         if self.primeClock > Process.biggest_prime_clock:
             Process.biggest_prime_clock = self.primeClock
 
+
         #setting log clock
-        decLogClock = nearest_multiple_array(antilog(self.logClock), self.receivedPrimes)
-        decSenderLogClock = nearest_multiple_array(antilog(sendTimeStamp.logClock), sendTimeStamp.receivedPrimes)
-        gcd = getGCD(decLogClock, decSenderLogClock)
-        #gcd  = getGCD(antilog(self.logClock), antilog(sendTimeStamp.logClock))
-
-        self.receivedPrimes.add(event.SendTimeStamp.primeNumber)
-
-        self.logClock = add(log(decLogClock) , log(decSenderLogClock))
-        self.logClock = sub(self.logClock, log(gcd))
+        gcd  = getGCD(antilog(self.logClock), antilog(sendTimeStamp.logClock))
+        self.logClock = add(self.logClock, sendTimeStamp.logClock)
+        self.logClock= sub(self.logClock, log(gcd))
         self.logClock = add(self.logClock, self.logPrime)
-        self.logClock = resetLogToNearestMultiple(self.logClock, self.receivedPrimes)
-
-        # self.logClock = add(self.logClock, sendTimeStamp.logClock)
-        # self.logClock= sub(self.logClock, log(gcd))
-        # self.logClock = add(self.logClock, self.logPrime)
-
+        self.logClock = roundAntiLogAndReturn(self.logClock)
         if self.logClock > Process.biggest_log_clock:
             Process.biggest_log_clock = self.logClock
 
         #self.logClock =  self.reset_log_value(self.logClock, self.primeNumber, sendTimeStamp.primeNumber)
-        #self.logClock = resetLogToNearestMultiple(self.logClock, self.receivedPrimes)
+        self.logClock = resetLogToNearestMultiple(self.logClock, self.receivedPrimes)
+
+        diff = sub(antilog(self.logClock), self.primeClock)
 
         event.ReceiveTimeStamp = TimeStamp(copyOf(self.vectorClock), mpfrCopyOf(self.primeClock), mpfrCopyOf(self.logClock),self.primeNumber, copyOf(self.receivedPrimes))
         #self.instances[event.receiveProcessId - 1].receiver_queue.append(event)
